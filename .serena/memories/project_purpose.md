@@ -1,0 +1,4 @@
+# Project Purpose
+The VidSynth Visualizer is a React-based frontend application designed to visualize an intelligent video processing pipeline ("VideoAlchemy"). It provides a dashboard for inspecting various stages of video analysis, including temporal segmentation, semantic grounding, logging, and cluster visualization.
+
+Currently, the application operates primarily as a mock/prototype, utilizing static data to demonstrate the UI and user experience of the intended pipeline. It is essentially a frontend-only project for visualizing data that would typically come from a backend video processing service.
