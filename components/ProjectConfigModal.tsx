@@ -126,7 +126,12 @@ const ProjectConfigModal: React.FC<ProjectConfigModalProps> = ({
                             {/* Status Indicator */}
                             <div className="absolute top-2 right-2">
                                 {vid.status === 'ready' && <CheckCircle size={16} className="text-emerald-400 bg-black/50 rounded-full" />}
-                                {vid.status === 'processing' && <div className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse box-content border-2 border-black/50" />}
+                                {(vid.status === 'processing' || vid.status === 'pending') && (
+                                  <div className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse box-content border-2 border-black/50" />
+                                )}
+                                {vid.status === 'error' && (
+                                  <div className="w-2.5 h-2.5 rounded-full bg-rose-500 box-content border-2 border-black/50" />
+                                )}
                             </div>
                             
                             {/* Selection Ring */}

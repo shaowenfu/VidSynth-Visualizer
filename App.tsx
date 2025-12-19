@@ -40,6 +40,7 @@ const App: React.FC = () => {
     segmented: asset.segmented,
     clipsUrl: resolveAssetUrl(asset.clips_url) || null,
     gtUrl: resolveAssetUrl(asset.gt_url) || null,
+    progress: asset.progress ?? null,
   });
 
   const refreshAssets = useCallback(async () => {

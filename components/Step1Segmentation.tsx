@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { VideoResource, Segment } from '../types';
 import { Play, Pause, Scissors, Code, ChevronDown, MonitorPlay, Activity, FileCode, BarChart3, PieChart, TrendingUp } from 'lucide-react';
 
@@ -14,32 +14,147 @@ const Step1Segmentation: React.FC<Step1Props> = ({ video, allVideos, onSelectVid
   const [currentTime, setCurrentTime] = useState(0);
   const [hoverInfo, setHoverInfo] = useState<{ segment: Segment, x: number, y: number } | null>(null);
   
-  // Execution State
-  const [executionState, setExecutionState] = useState<'idle' | 'running' | 'done'>('idle');
-  const [progress, setProgress] = useState(0);
+  const [predictedSegments, setPredictedSegments] = useState<Segment[]>([]);
+  const [progressByVideo, setProgressByVideo] = useState<Record<string, number>>({});
+  const [statusByVideo, setStatusByVideo] = useState<Record<string, 'idle' | 'pending' | 'processing' | 'done' | 'error'>>({});
+  const [taskError, setTaskError] = useState<string | null>(null);
 
-  // Reset execution state when switching videos
+  const resolveStatus = (target: VideoResource) => {
+    const stored = statusByVideo[target.id];
+    if (stored) {
+      return stored;
+    }
+    if (target.status === 'processing' || target.status === 'pending') {
+      return 'processing';
+    }
+    if (target.status === 'ready' || target.segmented) {
+      return 'done';
+    }
+    if (target.status === 'error') {
+      return 'error';
+    }
+    return 'idle';
+  };
+
+  const fetchSegments = useCallback(async (videoId: string, clipsUrl?: string | null) => {
+    const url = clipsUrl || `/static/segmentation/${videoId}/clips.json`;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json();
+      if (!Array.isArray(payload)) {
+        return;
+      }
+      const segments: Segment[] = payload.map((clip) => ({
+        id: `clip_${clip.clip_id ?? clip.clipId ?? clip.id ?? ''}`,
+        start: Number(clip.t_start ?? clip.start ?? 0),
+        end: Number(clip.t_end ?? clip.end ?? 0),
+        label: `Clip ${clip.clip_id ?? clip.clipId ?? ''}`,
+      }));
+      setPredictedSegments(segments);
+    } catch (error) {
+      return;
+    }
+  }, []);
+
   useEffect(() => {
-    setExecutionState('idle');
-    setProgress(0);
-  }, [video.id]);
+    setPredictedSegments([]);
+    setTaskError(null);
+    const status = resolveStatus(video);
+    if (status === 'done' || video.segmented) {
+      fetchSegments(video.id, video.clipsUrl);
+    }
+  }, [video.id, video.segmented, video.clipsUrl, fetchSegments]);
 
-  const handleExecute = () => {
-    if (executionState === 'running') return;
-    
-    setExecutionState('running');
-    setProgress(0);
-
-    const interval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setExecutionState('done');
-          return 100;
+  useEffect(() => {
+    const source = new EventSource('/api/events');
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.data) return;
+      try {
+        const message = JSON.parse(event.data);
+        const { type, payload } = message || {};
+        if (type === 'snapshot' && payload?.statuses) {
+          setStatusByVideo((prev) => {
+            const next = { ...prev };
+            Object.entries(payload.statuses).forEach(([videoId, status]) => {
+              if (status && typeof status === 'object') {
+                const state = (status as any).status as 'idle' | 'pending' | 'processing' | 'done' | 'error';
+                if (state) {
+                  next[videoId] = state;
+                }
+              }
+            });
+            return next;
+          });
+          setProgressByVideo((prev) => {
+            const next = { ...prev };
+            Object.entries(payload.statuses).forEach(([videoId, status]) => {
+              const value = (status as any)?.progress;
+              if (typeof value === 'number') {
+                next[videoId] = value;
+              }
+            });
+            return next;
+          });
+          return;
         }
-        return prev + 5; // Fast simulation
+        if (type === 'status_update' && payload?.video_id) {
+          const status = payload.status as 'idle' | 'pending' | 'processing' | 'done' | 'error';
+          if (status) {
+            setStatusByVideo((prev) => ({ ...prev, [payload.video_id]: status }));
+          }
+          if (typeof payload.progress === 'number') {
+            setProgressByVideo((prev) => ({ ...prev, [payload.video_id]: payload.progress }));
+          }
+          return;
+        }
+        if (type === 'task_complete' && payload?.video_id) {
+          setStatusByVideo((prev) => ({ ...prev, [payload.video_id]: 'done' }));
+          setProgressByVideo((prev) => ({ ...prev, [payload.video_id]: 100 }));
+          if (payload.video_id === video.id) {
+            fetchSegments(payload.video_id, payload.clips_url);
+          }
+          return;
+        }
+        if (type === 'error' && payload?.video_id) {
+          setStatusByVideo((prev) => ({ ...prev, [payload.video_id]: 'error' }));
+          if (payload.video_id === video.id) {
+            setTaskError(payload.message || 'Task failed');
+          }
+        }
+      } catch (error) {
+        return;
+      }
+    };
+    source.onmessage = handleMessage;
+    source.onerror = () => {
+      setTaskError('SSE connection lost');
+    };
+    return () => source.close();
+  }, [video.id, fetchSegments]);
+
+  const handleExecute = async () => {
+    const currentStatus = resolveStatus(video);
+    if (currentStatus === 'processing' || currentStatus === 'pending') return;
+    setTaskError(null);
+    setStatusByVideo((prev) => ({ ...prev, [video.id]: 'processing' }));
+    setProgressByVideo((prev) => ({ ...prev, [video.id]: 0 }));
+    const force = currentStatus === 'done';
+    try {
+      const response = await fetch('/api/segment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_ids: [video.id], force }),
       });
-    }, 50);
+      if (!response.ok) {
+        throw new Error(`Request failed: ${response.status}`);
+      }
+    } catch (error) {
+      setStatusByVideo((prev) => ({ ...prev, [video.id]: 'error' }));
+      setTaskError(error instanceof Error ? error.message : 'Task failed');
+    }
   };
 
   const formatTime = (t: number) => {
@@ -59,6 +174,12 @@ const Step1Segmentation: React.FC<Step1Props> = ({ video, allVideos, onSelectVid
   ];
 
   const getClipColor = (index: number) => PALETTE[index % PALETTE.length];
+  const currentStatus = resolveStatus(video);
+  const currentProgress = progressByVideo[video.id] ?? (currentStatus === 'done' ? 100 : 0);
+  const isProcessing = currentStatus === 'processing' || currentStatus === 'pending';
+  const isDone = currentStatus === 'done';
+  const hasPredicted = predictedSegments.length > 0;
+  const hasError = currentStatus === 'error';
 
   return (
     <section className="h-[calc(100vh-8rem)] flex flex-col snap-start scroll-mt-24 px-6 pb-2 box-border">
@@ -88,28 +209,33 @@ const Step1Segmentation: React.FC<Step1Props> = ({ video, allVideos, onSelectVid
 
              {/* Execute Button */}
              <div className="w-[220px]">
-                 {executionState === 'running' ? (
+                 {isProcessing ? (
                      <div className="w-full bg-slate-950 rounded-md border border-slate-700 p-0.5 relative overflow-hidden h-9 flex items-center justify-center">
                          <div className="absolute inset-0 bg-cyan-900/20 w-full h-full">
-                             <div className="h-full bg-cyan-500/20 transition-all duration-75" style={{ width: `${progress}%` }}></div>
+                             <div className="h-full bg-cyan-500/20 transition-all duration-75" style={{ width: `${currentProgress}%` }}></div>
                          </div>
                          <span className="relative text-[10px] font-bold text-cyan-400 font-mono tracking-wider flex items-center gap-2">
-                            PROCESSING {progress}%
+                            PROCESSING {currentProgress}%
                          </span>
                      </div>
                  ) : (
                      <button 
                         onClick={handleExecute}
                         className={`w-full font-bold h-9 rounded-md shadow-lg flex items-center justify-center gap-2 transition-all active:scale-[0.98] group text-xs
-                            ${executionState === 'done' 
+                            ${isDone 
                                 ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-600' 
                                 : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30'
                             }
                         `}
                     >
-                        <Scissors size={14} className={executionState === 'done' ? "text-slate-400" : "group-hover:rotate-12 transition-transform"} />
-                        <span>{executionState === 'done' ? 'Re-run Segmentation' : 'Execute Segmentation'}</span>
+                        <Scissors size={14} className={isDone ? "text-slate-400" : "group-hover:rotate-12 transition-transform"} />
+                        <span>{isDone ? 'Re-run Segmentation' : 'Execute Segmentation'}</span>
                     </button>
+                 )}
+                 {taskError && (
+                   <div className="mt-2 text-[10px] text-rose-400">
+                     {taskError}
+                   </div>
                  )}
              </div>
         </div>
@@ -195,12 +321,17 @@ const Step1Segmentation: React.FC<Step1Props> = ({ video, allVideos, onSelectVid
                         </div>
                         <div className="flex-1 h-5 bg-[#18181b] rounded relative overflow-hidden ring-1 ring-white/5 transition-colors">
                             {/* Empty State / Running State */}
-                            {executionState === 'idle' && (
+                            {!isProcessing && !hasPredicted && !hasError && (
                                 <div className="absolute inset-0 flex items-center justify-center">
-                                    <span className="text-[8px] text-slate-700 font-mono tracking-tight">-- WAITING FOR EXECUTION --</span>
+                                    <span className="text-[8px] text-slate-700 font-mono tracking-tight">-- NO SEGMENTS --</span>
                                 </div>
                             )}
-                            {executionState === 'running' && (
+                            {hasError && (
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <span className="text-[8px] text-rose-400 font-mono tracking-tight">-- SEGMENTATION FAILED --</span>
+                                </div>
+                            )}
+                            {isProcessing && (
                                 <div className="absolute inset-0 bg-blue-500/10 flex items-center justify-center">
                                     <div className="w-1/3 h-0.5 bg-blue-500/30 rounded-full overflow-hidden">
                                         <div className="h-full bg-blue-400 animate-progress-indeterminate"></div>
@@ -209,7 +340,7 @@ const Step1Segmentation: React.FC<Step1Props> = ({ video, allVideos, onSelectVid
                             )}
 
                             {/* Segments (Only show when done) */}
-                            {executionState === 'done' && video.predictedSegments.map((seg, idx) => {
+                            {hasPredicted && predictedSegments.map((seg, idx) => {
                                 const colors = getClipColor(idx);
                                 return (
                                     <div

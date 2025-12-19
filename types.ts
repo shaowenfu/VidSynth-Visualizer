@@ -20,12 +20,13 @@ export interface VideoResource {
   thumbnail: string;
   duration: number; // seconds
   hasGT: boolean;
-  status: 'idle' | 'processing' | 'ready';
+  status: 'idle' | 'pending' | 'processing' | 'ready' | 'error';
   groundTruth?: GroundTruth;
   predictedSegments: Segment[];
   segmented?: boolean;
   clipsUrl?: string | null;
   gtUrl?: string | null;
+  progress?: number | null;
 }
 
 export interface ThemeDefinition {
@@ -68,5 +69,6 @@ export interface AssetRecord {
   thumb_url?: string | null;
   gt_url?: string | null;
   clips_url?: string | null;
-  status?: 'idle' | 'processing' | 'ready';
+  status?: 'idle' | 'pending' | 'processing' | 'ready' | 'error';
+  progress?: number | null;
 }
