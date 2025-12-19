@@ -1,44 +1,82 @@
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Step1Segmentation from './components/Step1Segmentation';
 import Step2Semantic from './components/Step2Semantic';
 import Step3Log from './components/Step3Log';
 import Step4FinalCut from './components/Step4FinalCut';
 import ClusterSandbox from './components/ClusterSandbox';
 import ProjectConfigModal from './components/ProjectConfigModal';
-import { MOCK_VIDEOS, MOCK_LOGS } from './constants';
-import { VideoResource } from './types';
+import { AssetRecord, VideoResource } from './types';
 import { Zap, LayoutGrid, Box, Settings2 } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [activeVideoId, setActiveVideoId] = useState<string>(MOCK_VIDEOS[0].id);
-  const [videos, setVideos] = useState<VideoResource[]>(MOCK_VIDEOS);
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  const [videos, setVideos] = useState<VideoResource[]>([]);
   const [currentView, setCurrentView] = useState<'pipeline' | 'sandbox'>('pipeline');
   const [isProjectConfigOpen, setIsProjectConfigOpen] = useState(false);
+  const [isLoadingAssets, setIsLoadingAssets] = useState(true);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+
+  const apiBase = import.meta.env.VITE_API_BASE || '';
+
+  const resolveAssetUrl = (url?: string | null) => {
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    return `${apiBase}${url}`;
+  };
+
+  const mapAssetToVideo = (asset: AssetRecord): VideoResource => ({
+    id: asset.id,
+    name: asset.name,
+    url: resolveAssetUrl(asset.video_url),
+    thumbnail: resolveAssetUrl(asset.thumb_url),
+    duration: asset.duration ?? 0,
+    hasGT: asset.hasGT,
+    status: asset.status ?? (asset.segmented ? 'ready' : 'idle'),
+    groundTruth: undefined,
+    predictedSegments: [],
+    segmented: asset.segmented,
+    clipsUrl: resolveAssetUrl(asset.clips_url) || null,
+    gtUrl: resolveAssetUrl(asset.gt_url) || null,
+  });
+
+  const refreshAssets = useCallback(async () => {
+    setIsLoadingAssets(true);
+    setAssetsError(null);
+    try {
+      const response = await fetch(`${apiBase}/api/assets`);
+      if (!response.ok) {
+        throw new Error(`Request failed: ${response.status}`);
+      }
+      const payload = (await response.json()) as AssetRecord[];
+      const nextVideos = payload.map(mapAssetToVideo);
+      setVideos(nextVideos);
+      setActiveVideoId((prev) => {
+        if (nextVideos.length === 0) {
+          return null;
+        }
+        if (prev && nextVideos.some((video) => video.id === prev)) {
+          return prev;
+        }
+        return nextVideos[0].id;
+      });
+    } catch (error) {
+      setAssetsError(error instanceof Error ? error.message : 'Unknown error');
+    } finally {
+      setIsLoadingAssets(false);
+    }
+  }, [apiBase]);
+
+  useEffect(() => {
+    refreshAssets();
+  }, [refreshAssets]);
 
   // Derive active video object
-  const activeVideo = videos.find(v => v.id === activeVideoId) || videos[0];
-
-  const handleUploadGT = () => {
-    // Simulate GT processing for multiple files by "unlocking" any non-GT videos
-    const updatedVideos = videos.map((v) => ({
-        ...v,
-        hasGT: true,
-        // Reset status to idle if it was not ready, or simulate processing
-        status: v.status === 'idle' ? 'processing' : v.status
-    }));
-    
-    // Simulate async processing finish
-    setVideos(updatedVideos);
-    setTimeout(() => {
-        setVideos(prev => prev.map(v => ({
-            ...v,
-            status: 'ready'
-        } as VideoResource)));
-    }, 1500);
-
-    alert("Batch Ground Truth injection started for 7 files.");
-  };
+  const activeVideo = activeVideoId
+    ? videos.find((v) => v.id === activeVideoId)
+    : undefined;
 
   return (
     <div className="h-screen bg-[#050505] text-slate-200 font-sans p-4 flex items-center justify-center overflow-hidden">
@@ -106,19 +144,28 @@ const App: React.FC = () => {
           
           {currentView === 'pipeline' ? (
              <div className="h-full flex flex-col overflow-hidden animate-in fade-in duration-300">
-                {/* Scrollable Pipeline Steps with Scroll Snap */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar pt-6 pb-20 snap-y snap-mandatory scroll-pt-6">
-                    <div className="space-y-12">
-                      <Step1Segmentation 
-                        video={activeVideo} 
-                        allVideos={videos}
-                        onSelectVideo={setActiveVideoId}
-                      />
-                      <Step2Semantic videos={videos} />
-                      <Step3Log logs={MOCK_LOGS} />
-                      <Step4FinalCut video={activeVideo} />
-                    </div>
-                </div>
+                {activeVideo ? (
+                  <div className="flex-1 overflow-y-auto custom-scrollbar pt-6 pb-20 snap-y snap-mandatory scroll-pt-6">
+                      <div className="space-y-12">
+                        <Step1Segmentation 
+                          video={activeVideo} 
+                          allVideos={videos}
+                          onSelectVideo={setActiveVideoId}
+                        />
+                        <Step2Semantic videos={videos} />
+                        <Step3Log logs={[]} />
+                        <Step4FinalCut video={activeVideo} />
+                      </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
+                    {isLoadingAssets
+                      ? 'Loading assets...'
+                      : assetsError
+                        ? `Failed to load assets: ${assetsError}`
+                        : 'No videos found. Upload in Project Config.'}
+                  </div>
+                )}
              </div>
           ) : (
              <div className="h-full w-full">
@@ -135,7 +182,7 @@ const App: React.FC = () => {
           videos={videos}
           activeVideoId={activeVideoId}
           onSelectVideo={setActiveVideoId}
-          onUploadGT={handleUploadGT}
+          onRefreshAssets={refreshAssets}
         />
 
       </div>

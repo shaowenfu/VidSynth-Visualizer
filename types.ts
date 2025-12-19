@@ -23,6 +23,9 @@ export interface VideoResource {
   status: 'idle' | 'processing' | 'ready';
   groundTruth?: GroundTruth;
   predictedSegments: Segment[];
+  segmented?: boolean;
+  clipsUrl?: string | null;
+  gtUrl?: string | null;
 }
 
 export interface ThemeDefinition {
@@ -53,4 +56,17 @@ export interface EdlItem {
   sourceEnd: number;
   targetStart: number;
   targetEnd: number;
+}
+
+export interface AssetRecord {
+  id: string;
+  name: string;
+  duration: number;
+  hasGT: boolean;
+  segmented: boolean;
+  video_url: string;
+  thumb_url?: string | null;
+  gt_url?: string | null;
+  clips_url?: string | null;
+  status?: 'idle' | 'processing' | 'ready';
 }

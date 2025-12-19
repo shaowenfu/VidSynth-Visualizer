@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { Upload, FileJson, CheckCircle, Plus, Database, X } from 'lucide-react';
 import { VideoResource } from '../types';
 
@@ -7,14 +7,55 @@ interface ProjectConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   videos: VideoResource[];
-  activeVideoId: string;
+  activeVideoId: string | null;
   onSelectVideo: (id: string) => void;
-  onUploadGT: () => void;
+  onRefreshAssets: () => Promise<void>;
 }
 
 const ProjectConfigModal: React.FC<ProjectConfigModalProps> = ({ 
-  isOpen, onClose, videos, activeVideoId, onSelectVideo, onUploadGT 
+  isOpen, onClose, videos, activeVideoId, onSelectVideo, onRefreshAssets 
 }) => {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const apiBase = import.meta.env.VITE_API_BASE || '';
+
+  const handleAddSources = () => {
+    if (isUploading) return;
+    inputRef.current?.click();
+  };
+
+  const handleFilesSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files: File[] = event.target.files ? Array.from(event.target.files) : [];
+    if (files.length === 0) {
+      return;
+    }
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+      const response = await fetch(`${apiBase}/api/import/videos`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+      await onRefreshAssets();
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Upload failed');
+    } finally {
+      setIsUploading(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleSync = async () => {
+    if (isUploading) return;
+    await onRefreshAssets();
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -42,10 +83,22 @@ const ProjectConfigModal: React.FC<ProjectConfigModalProps> = ({
                     <span className="w-2 h-2 bg-cyan-500 rounded-full"></span>
                     Video Resource Pool ({videos.length})
                     </span>
-                    <button className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 bg-cyan-950/30 px-3 py-1.5 rounded transition-colors border border-cyan-900/50">
-                    <Upload size={12} /> Add Sources
+                    <button
+                      onClick={handleAddSources}
+                      className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 bg-cyan-950/30 px-3 py-1.5 rounded transition-colors border border-cyan-900/50 disabled:opacity-40"
+                      disabled={isUploading}
+                    >
+                    <Upload size={12} /> {isUploading ? 'Uploading...' : 'Add Sources'}
                     </button>
                 </div>
+
+                <input
+                  ref={inputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={handleFilesSelected}
+                />
                 
                 <div className="grid grid-cols-4 gap-4">
                     {videos.map((vid) => (
@@ -85,13 +138,21 @@ const ProjectConfigModal: React.FC<ProjectConfigModalProps> = ({
                     ))}
                     
                     {/* Add placeholder */}
-                    <div className="aspect-video border-2 border-dashed border-slate-700/50 rounded-lg flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-slate-500 hover:bg-slate-800/30 transition-colors group">
+                    <div
+                      onClick={handleAddSources}
+                      className="aspect-video border-2 border-dashed border-slate-700/50 rounded-lg flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-slate-500 hover:bg-slate-800/30 transition-colors group"
+                    >
                         <div className="p-3 bg-slate-800 rounded-full group-hover:bg-slate-700 transition-colors">
                             <Plus className="text-slate-500 group-hover:text-slate-300" />
                         </div>
                         <span className="text-xs text-slate-600 group-hover:text-slate-400 font-medium">Add Video</span>
                     </div>
                 </div>
+                {uploadError && (
+                  <div className="mt-3 text-[11px] text-rose-400">
+                    {uploadError}
+                  </div>
+                )}
             </section>
 
             <hr className="border-slate-800" />
@@ -103,7 +164,11 @@ const ProjectConfigModal: React.FC<ProjectConfigModalProps> = ({
                         <FileJson className="text-rose-500" size={14} />
                         GT Registry & Mapping
                     </span>
-                    <button onClick={onUploadGT} className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded flex items-center gap-1 transition-colors border border-slate-700">
+                    <button
+                      onClick={handleSync}
+                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded flex items-center gap-1 transition-colors border border-slate-700 disabled:opacity-40"
+                      disabled={isUploading}
+                    >
                     <Upload size={10} /> Sync JSONs
                     </button>
                 </div>
